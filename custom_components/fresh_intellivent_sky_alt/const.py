@@ -1,6 +1,6 @@
 """Constants for the Fresh Intellivent Sky integration."""
 
-DOMAIN = "fresh_intellivent_sky"
+DOMAIN = "fresh_intellivent_sky_alt"
 
 NAME = ["Intellivent SKY", "Intellivent ICE"]
 

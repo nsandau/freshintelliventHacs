@@ -1,6 +1,6 @@
 {
-  "domain": "fresh_intellivent_sky",
-  "name": "Fresh Intellivent Sky",
+  "domain": "fresh_intellivent_sky_alt",
+  "name": "Fresh Intellivent Sky (Alt)",
   "config_flow": true,
   "documentation": "https://github.com/angoyd/freshintelliventHacs",
   "requirements": ["pyfreshintellivent==0.3.4"],

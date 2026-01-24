@@ -7,7 +7,7 @@ conventions discovered from the repository.
 ## Repository Overview
 
 - Home Assistant custom integration for Fresh Intellivent Sky.
-- Python-only, integration lives under `custom_components/fresh_intellivent_sky`.
+- Python-only, integration lives under `custom_components/fresh_intellivent_sky_alt`.
 - CI runs linting (Black + Flake8) and HACS validation.
 - No tests or build steps are defined in this repo.
 
@@ -79,7 +79,7 @@ conventions discovered from the repository.
 - Classes: `PascalCase`.
 - Functions and variables: `snake_case`.
 - Module-level logger: `_LOGGER = logging.getLogger(__name__)`.
-- Domain string: `DOMAIN = "fresh_intellivent_sky"`.
+- Domain string: `DOMAIN = "fresh_intellivent_sky_alt"`.
 
 ### Async Patterns (Home Assistant)
 
@@ -114,7 +114,7 @@ conventions discovered from the repository.
 
 ### Constants and Configuration
 
-- Centralize constants in `custom_components/fresh_intellivent_sky/const.py`.
+- Centralize constants in `custom_components/fresh_intellivent_sky_alt/const.py`.
 - For config options use constants like `CONF_AUTH_KEY`, `CONF_SCAN_INTERVAL`.
 - Use `DEFAULT_SCAN_INTERVAL` and `TIMEOUT` from `const.py`.
 - Keep config flow keys and user-facing strings consistent.
@@ -128,7 +128,7 @@ conventions discovered from the repository.
 
 ### JSON/Translation Files
 
-- Translations live in `custom_components/fresh_intellivent_sky/translations`.
+- Translations live in `custom_components/fresh_intellivent_sky_alt/translations`.
 - Keep keys stable; use lower_snake_case for translation keys.
 - `strings.json` should mirror translation structure.
 
@@ -140,21 +140,21 @@ conventions discovered from the repository.
 
 ## Suggested Workflow for Agents
 
-1. Read `custom_components/fresh_intellivent_sky/` files relevant to change.
-2. Update or add constants in `custom_components/fresh_intellivent_sky/const.py`.
+1. Read `custom_components/fresh_intellivent_sky_alt/` files relevant to change.
+2. Update or add constants in `custom_components/fresh_intellivent_sky_alt/const.py`.
 3. Ensure async patterns and Home Assistant conventions are respected.
 4. Run `python -m black .` and `python -m flake8` if touching Python files.
 5. Note: no tests currently exist; avoid claiming test results.
 
 ## Files of Interest
 
-- `custom_components/fresh_intellivent_sky/__init__.py`: integration setup.
-- `custom_components/fresh_intellivent_sky/config_flow.py`: UI config flow.
-- `custom_components/fresh_intellivent_sky/sensor.py`: sensor entities.
-- `custom_components/fresh_intellivent_sky/switch.py`: switch entities.
-- `custom_components/fresh_intellivent_sky/number.py`: number entities.
-- `custom_components/fresh_intellivent_sky/select.py`: select entities.
-- `custom_components/fresh_intellivent_sky/const.py`: constants.
+- `custom_components/fresh_intellivent_sky_alt/__init__.py`: integration setup.
+- `custom_components/fresh_intellivent_sky_alt/config_flow.py`: UI config flow.
+- `custom_components/fresh_intellivent_sky_alt/sensor.py`: sensor entities.
+- `custom_components/fresh_intellivent_sky_alt/switch.py`: switch entities.
+- `custom_components/fresh_intellivent_sky_alt/number.py`: number entities.
+- `custom_components/fresh_intellivent_sky_alt/select.py`: select entities.
+- `custom_components/fresh_intellivent_sky_alt/const.py`: constants.
 
 ## Notes for Changes
 
