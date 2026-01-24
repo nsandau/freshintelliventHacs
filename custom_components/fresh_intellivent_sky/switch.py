@@ -16,7 +16,8 @@ from homeassistant.helpers.update_coordinator import (
 )
 from pyfreshintellivent import FreshIntelliVent
 
-from .const import CONSTANT_SPEED_UPDATE, DOMAIN, ENABLED_KEY, RPM_KEY
+from .const import DOMAIN, ENABLED_KEY, RPM_KEY
+from .coordinator import FreshIntelliventCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors dynamically through discovery."""
-    coordinator: DataUpdateCoordinator[FreshIntelliVent] = hass.data[DOMAIN][
+    coordinator: FreshIntelliventCoordinator = hass.data[DOMAIN][
         config_entry.entry_id
     ]
 
@@ -90,11 +91,11 @@ class FreshIntelliventSkySwitch(
     def is_on(self) -> bool:
         """Return the value reported by the sensor."""
         if self._keys is None:
-            return None
+            return False
         value = self.coordinator.data.modes
         for key in self._keys:
             if value.get(key) is None:
-                return None
+                return False
             value = value[key]
 
         return cast(bool, value)
@@ -112,9 +113,11 @@ class FreshIntelliventSkySwitch(
         key = self.entity_description.key
 
         if key == "constant_speed_enabled":
-            self.coordinator.hass.data[CONSTANT_SPEED_UPDATE] = {
-                ENABLED_KEY: new_value,
-                RPM_KEY: self.device.modes["constant_speed"][RPM_KEY],
-            }
-
-        await self.coordinator.async_request_refresh()
+            await self.coordinator.async_write(
+                {
+                    "constant_speed": {
+                        ENABLED_KEY: new_value,
+                        RPM_KEY: self.coordinator.data.modes["constant_speed"][RPM_KEY],
+                    }
+                }
+            )

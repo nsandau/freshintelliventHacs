@@ -17,17 +17,14 @@ from homeassistant.helpers.update_coordinator import (
 from pyfreshintellivent import FreshIntelliVent
 
 from .const import (
-    AIRING_MODE_UPDATE,
-    CONSTANT_SPEED_UPDATE,
     DELAY_KEY,
     DETECTION_KEY,
     DOMAIN,
     ENABLED_KEY,
-    HUMIDITY_MODE_UPDATE,
     MINUTES_KEY,
     RPM_KEY,
-    TIMER_MODE_UPDATE,
 )
+from .coordinator import FreshIntelliventCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,7 +35,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors dynamically through discovery."""
-    coordinator: DataUpdateCoordinator[FreshIntelliVent] = hass.data[DOMAIN][
+    coordinator: FreshIntelliventCoordinator = hass.data[DOMAIN][
         config_entry.entry_id
     ]
 
@@ -203,58 +200,86 @@ class FreshIntelliventSkyNumber(
         """Set value."""
         key = self.entity_description.key
 
+        modes = self.coordinator.data.modes
+
         if key == "humidity_and_voc_rpm":
-            self.coordinator.hass.data[HUMIDITY_MODE_UPDATE] = {
-                ENABLED_KEY: self.device.modes["humidity"][ENABLED_KEY],
-                DETECTION_KEY: self.device.modes["humidity"][DETECTION_KEY],
-                RPM_KEY: int(value),
-            }
+            await self.coordinator.async_write(
+                {
+                    "humidity": {
+                        ENABLED_KEY: modes["humidity"][ENABLED_KEY],
+                        DETECTION_KEY: modes["humidity"][DETECTION_KEY],
+                        RPM_KEY: int(value),
+                    }
+                }
+            )
         elif key == "constant_speed_rpm":
-            self.coordinator.hass.data[CONSTANT_SPEED_UPDATE] = {
-                ENABLED_KEY: self.device.modes["constant_speed"][ENABLED_KEY],
-                RPM_KEY: int(value),
-            }
+            await self.coordinator.async_write(
+                {
+                    "constant_speed": {
+                        ENABLED_KEY: modes["constant_speed"][ENABLED_KEY],
+                        RPM_KEY: int(value),
+                    }
+                }
+            )
         elif key == "airing_rpm":
-            self.coordinator.hass.data[AIRING_MODE_UPDATE] = {
-                ENABLED_KEY: self.device.modes["airing"][ENABLED_KEY],
-                MINUTES_KEY: self.device.modes["airing"][MINUTES_KEY],
-                RPM_KEY: int(value),
-            }
+            await self.coordinator.async_write(
+                {
+                    "airing": {
+                        ENABLED_KEY: modes["airing"][ENABLED_KEY],
+                        MINUTES_KEY: modes["airing"][MINUTES_KEY],
+                        RPM_KEY: int(value),
+                    }
+                }
+            )
         elif key == "airing_minutes":
-            self.coordinator.hass.data[AIRING_MODE_UPDATE] = {
-                ENABLED_KEY: self.device.modes["airing"][ENABLED_KEY],
-                MINUTES_KEY: int(value),
-                RPM_KEY: self.device.modes["airing"][RPM_KEY],
-            }
+            await self.coordinator.async_write(
+                {
+                    "airing": {
+                        ENABLED_KEY: modes["airing"][ENABLED_KEY],
+                        MINUTES_KEY: int(value),
+                        RPM_KEY: modes["airing"][RPM_KEY],
+                    }
+                }
+            )
         elif key == "timer_and_light_rpm":
-            self.coordinator.hass.data[TIMER_MODE_UPDATE] = {
-                MINUTES_KEY: self.device.modes["timer"][MINUTES_KEY],
-                DELAY_KEY: {
-                    ENABLED_KEY: self.device.modes["timer"][DELAY_KEY][ENABLED_KEY],
-                    MINUTES_KEY: self.device.modes["timer"][DELAY_KEY][MINUTES_KEY],
-                },
-                RPM_KEY: int(value),
-            }
+            await self.coordinator.async_write(
+                {
+                    "timer": {
+                        MINUTES_KEY: modes["timer"][MINUTES_KEY],
+                        DELAY_KEY: {
+                            ENABLED_KEY: modes["timer"][DELAY_KEY][ENABLED_KEY],
+                            MINUTES_KEY: modes["timer"][DELAY_KEY][MINUTES_KEY],
+                        },
+                        RPM_KEY: int(value),
+                    }
+                }
+            )
         elif key == "timer_minutes":
-            self.coordinator.hass.data[TIMER_MODE_UPDATE] = {
-                MINUTES_KEY: int(value),
-                DELAY_KEY: {
-                    ENABLED_KEY: self.device.modes["timer"][DELAY_KEY][ENABLED_KEY],
-                    MINUTES_KEY: self.device.modes["timer"][DELAY_KEY][MINUTES_KEY],
-                },
-                RPM_KEY: self.device.modes["timer"][RPM_KEY],
-            }
+            await self.coordinator.async_write(
+                {
+                    "timer": {
+                        MINUTES_KEY: int(value),
+                        DELAY_KEY: {
+                            ENABLED_KEY: modes["timer"][DELAY_KEY][ENABLED_KEY],
+                            MINUTES_KEY: modes["timer"][DELAY_KEY][MINUTES_KEY],
+                        },
+                        RPM_KEY: modes["timer"][RPM_KEY],
+                    }
+                }
+            )
         elif key == "timer_delay_minutes":
             delay_minutes = int(value)
             delay_enabled = delay_minutes > 0
 
-            self.coordinator.hass.data[TIMER_MODE_UPDATE] = {
-                MINUTES_KEY: self.device.modes["timer"][MINUTES_KEY],
-                DELAY_KEY: {
-                    ENABLED_KEY: delay_enabled,
-                    MINUTES_KEY: delay_minutes,
-                },
-                RPM_KEY: self.device.modes["timer"][RPM_KEY],
-            }
-
-        await self.coordinator.async_request_refresh()
+            await self.coordinator.async_write(
+                {
+                    "timer": {
+                        MINUTES_KEY: modes["timer"][MINUTES_KEY],
+                        DELAY_KEY: {
+                            ENABLED_KEY: delay_enabled,
+                            MINUTES_KEY: delay_minutes,
+                        },
+                        RPM_KEY: modes["timer"][RPM_KEY],
+                    }
+                }
+            )

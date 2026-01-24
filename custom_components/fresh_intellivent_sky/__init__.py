@@ -2,41 +2,20 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_SCAN_INTERVAL, Platform
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from pyfreshintellivent import FreshIntelliVent
 
-from .const import (
-    AIRING_MODE_UPDATE,
-    CONF_AUTH_KEY,
-    CONSTANT_SPEED_UPDATE,
-    DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
-    HUMIDITY_MODE_UPDATE,
-    LIGHT_AND_VOC_MODE_UPDATE,
-    TIMEOUT,
-    TIMER_MODE_UPDATE,
-)
-from .fetch_and_update import FetchAndUpdate
+from .const import CONF_AUTH_KEY, DOMAIN
+from .coordinator import FreshIntelliventCoordinator
 
 
 class UnableToConnect(HomeAssistantError):
     """Exception to indicate that we can not connect to device."""
 
-
-ALL_UPDATES = [
-    CONSTANT_SPEED_UPDATE,
-    AIRING_MODE_UPDATE,
-    HUMIDITY_MODE_UPDATE,
-    LIGHT_AND_VOC_MODE_UPDATE,
-    TIMER_MODE_UPDATE,
-]
 
 AUTHENTICATED_PLATFORMS = [
     Platform.NUMBER,
@@ -57,14 +36,9 @@ async def async_setup_entry(
 ) -> bool:  # pyling: disable=too-many-statements
     """Set up Fresh Intellivent Sky."""
     hass.data.setdefault(DOMAIN, {})
-    entry_data = hass.data[DOMAIN].setdefault(entry.entry_id, {})
     address = entry.unique_id
 
     assert address is not None
-
-    # Make sure we remove all old data
-    for update in ALL_UPDATES:
-        hass.data[update] = None
 
     ble_device = bluetooth.async_ble_device_from_address(hass, address)
 
@@ -75,66 +49,21 @@ async def async_setup_entry(
 
     auth_key = entry.data.get(CONF_AUTH_KEY)
 
-    if not ble_device:
-        raise ConfigEntryNotReady(
-            f"Could not find Fresh Intellivent Sky device with address {address}"
-        )
-
-    async def _async_update_method():
-        """Get data from Fresh Intellivent Sky."""
-        ble_device = bluetooth.async_ble_device_from_address(hass, address)
-
-        if not ble_device:
-            raise UpdateFailed(f"Unable to find device: {address}")
-
-        client = FreshIntelliVent(ble_device=ble_device)
-
-        error = None
-
-        try:
-            await client.connect(timeout=TIMEOUT)
-            if auth_key is not None:
-                await client.authenticate(authentication_code=auth_key)
-            await client.fetch_sensor_data()
-            await client.fetch_device_information()
-
-            updates = FetchAndUpdate(hass=hass, client=client)
-            await updates.update_all()
-
-        except Exception as err:  # pylint: disable=broad-except
-            error = UpdateFailed(f"Unable to fetch data: {err}")
-
-        try:
-            await client.disconnect()
-        except Exception as err:  # pylint: disable=broad-except
-            _LOGGER.error(
-                "Couldn't disconnect",
-                address,
-                err,
-            )
-
-        if error is not None:
-            raise error
-
-        return client
-
-    entry_data[CONF_SCAN_INTERVAL] = entry.options.get(
-        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-    )
-
     entry.async_on_unload(entry.add_update_listener(update_listener))
 
-    coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name=DOMAIN,
-        update_method=_async_update_method,
-        update_interval=timedelta(
-            seconds=entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-        ),
+    coordinator = FreshIntelliventCoordinator(
+        hass=hass,
+        config_entry=entry,
+        address=address,
+        auth_key=auth_key,
     )
+    coordinator.async_start_worker()
 
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except Exception:
+        await coordinator.async_stop_worker()
+        raise
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
@@ -154,6 +83,11 @@ async def update_listener(hass: HomeAssistant, config_entry: ConfigEntry) -> Non
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    coordinator: FreshIntelliventCoordinator | None = hass.data[DOMAIN].get(
+        entry.entry_id
+    )
+    if coordinator is not None:
+        await coordinator.async_stop_worker()
     if unload_ok := await hass.config_entries.async_unload_platforms(
         entry, AUTHENTICATED_PLATFORMS
     ):
