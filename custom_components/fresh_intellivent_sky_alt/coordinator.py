@@ -27,6 +27,8 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+_WRITE_IDLE_TIMEOUT = 30
+
 
 @dataclass(slots=True)
 class WriteRequest:
@@ -83,23 +85,33 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
 
     async def async_write(self, changes: dict[str, Any]) -> None:
         """Queue a write and wait for completion."""
+        self.async_start_worker()
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         await self._queue.put(WriteRequest(changes=changes, done=future))
         await future
 
     async def _write_worker(self) -> None:
         """Process queued writes in FIFO order."""
-        while True:
-            request = await self._queue.get()
-            try:
-                await self._apply_changes(request.changes)
-                if not request.done.done():
-                    request.done.set_result(None)
-            except Exception as err:  # pylint: disable=broad-except
-                if not request.done.done():
-                    request.done.set_exception(err)
-            finally:
-                self._queue.task_done()
+        try:
+            while True:
+                try:
+                    request = await asyncio.wait_for(
+                        self._queue.get(),
+                        timeout=_WRITE_IDLE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    break
+                try:
+                    await self._apply_changes(request.changes)
+                    if not request.done.done():
+                        request.done.set_result(None)
+                except Exception as err:  # pylint: disable=broad-except
+                    if not request.done.done():
+                        request.done.set_exception(err)
+                finally:
+                    self._queue.task_done()
+        finally:
+            self._worker_task = None
 
     async def _async_update_data(self) -> FreshIntelliVent:
         """Fetch data from the device."""

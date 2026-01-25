@@ -57,8 +57,6 @@ async def async_setup_entry(
         address=address,
         auth_key=auth_key,
     )
-    coordinator.async_start_worker()
-
     try:
         await coordinator.async_config_entry_first_refresh()
     except Exception:
