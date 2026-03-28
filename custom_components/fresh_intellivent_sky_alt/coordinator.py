@@ -1,12 +1,15 @@
 """Data coordinator for Fresh Intellivent Sky."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
+from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -28,6 +31,10 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 _WRITE_IDLE_TIMEOUT = 30
+_OPERATION_RETRY_ATTEMPTS = 2
+_OPERATION_RETRY_BACKOFF_SECONDS = 1
+
+_ResultT = TypeVar("_ResultT")
 
 
 @dataclass(slots=True)
@@ -120,32 +127,129 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
                 raise UpdateFailed("Update skipped while writes are pending")
             return self.data
 
-        async with self._lock:
-            client = await self._async_connect()
-            try:
-                await client.fetch_sensor_data()
-                await client.fetch_device_information()
-                await client.fetch_airing()
-                await client.fetch_constant_speed()
-                await client.fetch_humidity()
-                await client.fetch_light_and_voc()
-                await client.fetch_timer()
-                return client
-            except Exception as err:  # pylint: disable=broad-except
-                raise UpdateFailed(f"Unable to fetch data: {err}")
-            finally:
-                await self._async_disconnect(client)
+        async def _fetch_data(client: FreshIntelliVent) -> FreshIntelliVent:
+            await client.fetch_sensor_data()
+            await client.fetch_device_information()
+            await client.fetch_airing()
+            await client.fetch_constant_speed()
+            await client.fetch_humidity()
+            await client.fetch_light_and_voc()
+            await client.fetch_timer()
+            return client
+
+        try:
+            return await self._run_session_operation("poll", _fetch_data)
+        except Exception as err:  # pylint: disable=broad-except
+            raise UpdateFailed(f"Unable to fetch data: {err}") from err
 
     async def _apply_changes(self, changes: dict[str, Any]) -> None:
         """Apply a set of changes to the device."""
-        async with self._lock:
-            client = await self._async_connect()
-            try:
-                await self._apply_change_payload(client, changes)
-            finally:
-                await self._async_disconnect(client)
+
+        async def _write_changes(client: FreshIntelliVent) -> None:
+            await self._apply_change_payload(client, changes)
+
+        await self._run_session_operation("write", _write_changes)
 
         self._apply_optimistic_updates(changes)
+
+    async def _run_session_operation(
+        self,
+        phase: str,
+        operation: Callable[[FreshIntelliVent], Awaitable[_ResultT]],
+    ) -> _ResultT:
+        """Run an operation in a connect/auth/disconnect session."""
+        async with self._lock:
+            for attempt in range(1, _OPERATION_RETRY_ATTEMPTS + 1):
+                client: FreshIntelliVent | None = None
+                started_at = time.monotonic()
+                try:
+                    _LOGGER.debug(
+                        "Starting %s attempt %s/%s for %s",
+                        phase,
+                        attempt,
+                        _OPERATION_RETRY_ATTEMPTS,
+                        self._address,
+                    )
+                    client = await self._async_connect()
+                    result = await operation(client)
+                    _LOGGER.debug(
+                        "Completed %s attempt %s/%s for %s in %.2fs",
+                        phase,
+                        attempt,
+                        _OPERATION_RETRY_ATTEMPTS,
+                        self._address,
+                        time.monotonic() - started_at,
+                    )
+                    return result
+                except Exception as err:  # pylint: disable=broad-except
+                    elapsed = time.monotonic() - started_at
+                    should_retry = (
+                        attempt < _OPERATION_RETRY_ATTEMPTS
+                        and self._is_transient_error(err)
+                    )
+                    if not should_retry:
+                        _LOGGER.debug(
+                            "Failed %s attempt %s/%s for %s in %.2fs: %s",
+                            phase,
+                            attempt,
+                            _OPERATION_RETRY_ATTEMPTS,
+                            self._address,
+                            elapsed,
+                            err,
+                        )
+                        raise
+
+                    backoff = _OPERATION_RETRY_BACKOFF_SECONDS * attempt
+                    _LOGGER.debug(
+                        "Transient %s failure on attempt %s/%s for %s after %.2fs: %s. "
+                        "Retrying in %ss",
+                        phase,
+                        attempt,
+                        _OPERATION_RETRY_ATTEMPTS,
+                        self._address,
+                        elapsed,
+                        err,
+                        backoff,
+                    )
+                finally:
+                    if client is not None:
+                        await self._async_disconnect(client)
+
+                await asyncio.sleep(backoff)
+
+        raise RuntimeError("Operation retry loop exited without result")
+
+    @staticmethod
+    def _is_transient_error(err: Exception) -> bool:
+        """Return True if an exception likely represents a transient BLE issue."""
+        root_error: BaseException = err
+        seen: set[int] = set()
+
+        while id(root_error) not in seen:
+            seen.add(id(root_error))
+            next_error = root_error.__cause__ or root_error.__context__
+            if next_error is None:
+                break
+            root_error = next_error
+
+        if isinstance(
+            root_error,
+            (asyncio.TimeoutError, TimeoutError, BleakError, ConnectionError),
+        ):
+            return True
+
+        if root_error.__class__.__name__ in {
+            "FreshIntelliventError",
+            "FreshIntelliventTimeoutError",
+        }:
+            return True
+
+        if isinstance(root_error, UpdateFailed) and "Unable to find device" in str(
+            root_error
+        ):
+            return True
+
+        return False
 
     async def _async_connect(self) -> FreshIntelliVent:
         """Connect to the BLE device."""
@@ -154,9 +258,17 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
             raise UpdateFailed(f"Unable to find device: {self._address}")
 
         client = FreshIntelliVent(ble_device=ble_device)
-        await client.connect(timeout=TIMEOUT)
-        if self._auth_key is not None:
-            await client.authenticate(authentication_code=self._auth_key)
+        try:
+            await asyncio.wait_for(client.connect(timeout=TIMEOUT), timeout=TIMEOUT)
+            if self._auth_key is not None:
+                await asyncio.wait_for(
+                    client.authenticate(authentication_code=self._auth_key),
+                    timeout=TIMEOUT,
+                )
+        except Exception:
+            await self._async_disconnect(client)
+            raise
+
         return client
 
     async def _async_disconnect(self, client: FreshIntelliVent) -> None:
