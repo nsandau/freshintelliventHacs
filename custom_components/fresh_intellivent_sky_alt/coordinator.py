@@ -63,6 +63,7 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
         config_entry: ConfigEntry,
         address: str,
         auth_key: str | None,
+        session_lock: asyncio.Lock | None = None,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -79,7 +80,8 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
         )
         self._address = address
         self._auth_key = auth_key
-        self._lock = asyncio.Lock()
+        self._entry_lock = asyncio.Lock()
+        self._session_lock = session_lock
         self._queue: asyncio.Queue[WriteRequest] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
         self._poll_count = 0
@@ -245,7 +247,19 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
         operation: Callable[[FreshIntelliVent], Awaitable[_ResultT]],
     ) -> _ResultT:
         """Run an operation in a connect/auth/disconnect session."""
-        async with self._lock:
+        if self._session_lock is not None:
+            async with self._session_lock:
+                return await self._run_session_operation_locked(phase, operation)
+
+        return await self._run_session_operation_locked(phase, operation)
+
+    async def _run_session_operation_locked(
+        self,
+        phase: str,
+        operation: Callable[[FreshIntelliVent], Awaitable[_ResultT]],
+    ) -> _ResultT:
+        """Run operation with per-entry lock acquired."""
+        async with self._entry_lock:
             for attempt in range(1, _OPERATION_RETRY_ATTEMPTS + 1):
                 client: FreshIntelliVent | None = None
                 started_at = time.monotonic()

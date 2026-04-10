@@ -1,6 +1,8 @@
 """The Fresh Intellivent Sky integration."""
+
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components import bluetooth
@@ -30,12 +32,14 @@ READ_ONLY_PLATFORMS = [
 
 _LOGGER = logging.getLogger(__name__)
 
+_SESSION_LOCK_KEY = "_session_lock"
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> bool:  # pyling: disable=too-many-statements
     """Set up Fresh Intellivent Sky."""
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
     address = entry.unique_id
 
     assert address is not None
@@ -51,11 +55,17 @@ async def async_setup_entry(
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
 
+    session_lock: asyncio.Lock = domain_data.setdefault(
+        _SESSION_LOCK_KEY,
+        asyncio.Lock(),
+    )
+
     coordinator = FreshIntelliventCoordinator(
         hass=hass,
         config_entry=entry,
         address=address,
         auth_key=auth_key,
+        session_lock=session_lock,
     )
     try:
         await coordinator.async_config_entry_first_refresh()
@@ -63,11 +73,10 @@ async def async_setup_entry(
         await coordinator.async_stop_worker()
         raise
 
-    hass.data[DOMAIN][entry.entry_id] = coordinator
+    domain_data[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(
-        entry,
-        READ_ONLY_PLATFORMS if auth_key is None else AUTHENTICATED_PLATFORMS
+        entry, READ_ONLY_PLATFORMS if auth_key is None else AUTHENTICATED_PLATFORMS
     )
 
     return True
