@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import time
 from dataclasses import dataclass
@@ -17,8 +18,16 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from pyfreshintellivent import FreshIntelliVent
 
 from .const import (
+    CONF_DEVICE_INFO_FETCH_EVERY,
+    CONF_ERROR_COOLDOWN_SECONDS,
+    CONF_MODE_FETCH_EVERY,
     CONF_SCAN_INTERVAL,
+    CONF_WRITE_DEBOUNCE_MS,
+    DEFAULT_DEVICE_INFO_FETCH_EVERY,
+    DEFAULT_ERROR_COOLDOWN_SECONDS,
+    DEFAULT_MODE_FETCH_EVERY,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_WRITE_DEBOUNCE_MS,
     DELAY_KEY,
     DETECTION_KEY,
     DOMAIN,
@@ -73,6 +82,47 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
         self._lock = asyncio.Lock()
         self._queue: asyncio.Queue[WriteRequest] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
+        self._poll_count = 0
+        self._mode_fetch_every = max(
+            1,
+            int(
+                config_entry.options.get(
+                    CONF_MODE_FETCH_EVERY,
+                    DEFAULT_MODE_FETCH_EVERY,
+                )
+            ),
+        )
+        self._device_info_fetch_every = max(
+            1,
+            int(
+                config_entry.options.get(
+                    CONF_DEVICE_INFO_FETCH_EVERY,
+                    DEFAULT_DEVICE_INFO_FETCH_EVERY,
+                )
+            ),
+        )
+        self._write_debounce_seconds = (
+            max(
+                0,
+                int(
+                    config_entry.options.get(
+                        CONF_WRITE_DEBOUNCE_MS,
+                        DEFAULT_WRITE_DEBOUNCE_MS,
+                    )
+                ),
+            )
+            / 1000
+        )
+        self._error_cooldown_seconds = max(
+            0,
+            int(
+                config_entry.options.get(
+                    CONF_ERROR_COOLDOWN_SECONDS,
+                    DEFAULT_ERROR_COOLDOWN_SECONDS,
+                )
+            ),
+        )
+        self._next_allowed_operation_at = 0.0
 
     def async_start_worker(self) -> None:
         """Start the write worker task."""
@@ -108,15 +158,29 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
                     )
                 except asyncio.TimeoutError:
                     break
+                batch = [request]
+                if self._write_debounce_seconds > 0:
+                    await asyncio.sleep(self._write_debounce_seconds)
+                    while True:
+                        try:
+                            batch.append(self._queue.get_nowait())
+                        except asyncio.QueueEmpty:
+                            break
+                changes = self._merge_write_changes(
+                    [write_request.changes for write_request in batch]
+                )
                 try:
-                    await self._apply_changes(request.changes)
-                    if not request.done.done():
-                        request.done.set_result(None)
+                    await self._apply_changes(changes)
+                    for queued_request in batch:
+                        if not queued_request.done.done():
+                            queued_request.done.set_result(None)
                 except Exception as err:  # pylint: disable=broad-except
-                    if not request.done.done():
-                        request.done.set_exception(err)
+                    for queued_request in batch:
+                        if not queued_request.done.done():
+                            queued_request.done.set_exception(err)
                 finally:
-                    self._queue.task_done()
+                    for _ in batch:
+                        self._queue.task_done()
         finally:
             self._worker_task = None
 
@@ -127,14 +191,37 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
                 raise UpdateFailed("Update skipped while writes are pending")
             return self.data
 
+        cooldown_remaining = self._cooldown_remaining_seconds()
+        if cooldown_remaining > 0:
+            if self.data is None:
+                raise UpdateFailed(
+                    f"Update skipped during cooldown ({cooldown_remaining:.1f}s)"
+                )
+
+            _LOGGER.debug(
+                "Skipping poll for %s during cooldown (%.1fs remaining)",
+                self._address,
+                cooldown_remaining,
+            )
+            return self.data
+
+        self._poll_count += 1
+        full_refresh = self.data is None
+        fetch_modes = full_refresh or self._poll_count % self._mode_fetch_every == 0
+        fetch_device_info = (
+            full_refresh or self._poll_count % self._device_info_fetch_every == 0
+        )
+
         async def _fetch_data(client: FreshIntelliVent) -> FreshIntelliVent:
             await client.fetch_sensor_data()
-            await client.fetch_device_information()
-            await client.fetch_airing()
-            await client.fetch_constant_speed()
-            await client.fetch_humidity()
-            await client.fetch_light_and_voc()
-            await client.fetch_timer()
+            if fetch_device_info:
+                await client.fetch_device_information()
+            if fetch_modes:
+                await client.fetch_airing()
+                await client.fetch_constant_speed()
+                await client.fetch_humidity()
+                await client.fetch_light_and_voc()
+                await client.fetch_timer()
             return client
 
         try:
@@ -162,6 +249,15 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
             for attempt in range(1, _OPERATION_RETRY_ATTEMPTS + 1):
                 client: FreshIntelliVent | None = None
                 started_at = time.monotonic()
+                cooldown_remaining = self._cooldown_remaining_seconds()
+                if phase == "write" and cooldown_remaining > 0:
+                    _LOGGER.debug(
+                        "Delaying %s for %s by %.1fs due to cooldown",
+                        phase,
+                        self._address,
+                        cooldown_remaining,
+                    )
+                    await asyncio.sleep(cooldown_remaining)
                 try:
                     _LOGGER.debug(
                         "Starting %s attempt %s/%s for %s",
@@ -183,11 +279,13 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
                     return result
                 except Exception as err:  # pylint: disable=broad-except
                     elapsed = time.monotonic() - started_at
+                    is_transient_error = self._is_transient_error(err)
                     should_retry = (
-                        attempt < _OPERATION_RETRY_ATTEMPTS
-                        and self._is_transient_error(err)
+                        attempt < _OPERATION_RETRY_ATTEMPTS and is_transient_error
                     )
                     if not should_retry:
+                        if is_transient_error:
+                            self._activate_cooldown()
                         _LOGGER.debug(
                             "Failed %s attempt %s/%s for %s in %.2fs: %s",
                             phase,
@@ -250,6 +348,40 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
             return True
 
         return False
+
+    @staticmethod
+    def _merge_write_changes(changesets: list[dict[str, Any]]) -> dict[str, Any]:
+        """Merge multiple queued write payloads into one payload."""
+
+        def _merge_dict(target: dict[str, Any], source: dict[str, Any]) -> None:
+            for key, value in source.items():
+                if isinstance(value, dict) and isinstance(target.get(key), dict):
+                    _merge_dict(target[key], value)
+                    continue
+                target[key] = copy.deepcopy(value)
+
+        merged: dict[str, Any] = {}
+        for changes in changesets:
+            _merge_dict(merged, changes)
+        return merged
+
+    def _activate_cooldown(self) -> None:
+        """Activate cooldown after a transient failure."""
+        if self._error_cooldown_seconds <= 0:
+            return
+
+        self._next_allowed_operation_at = (
+            time.monotonic() + self._error_cooldown_seconds
+        )
+        _LOGGER.debug(
+            "Activated cooldown for %s: %.1fs",
+            self._address,
+            self._error_cooldown_seconds,
+        )
+
+    def _cooldown_remaining_seconds(self) -> float:
+        """Return remaining cooldown time in seconds."""
+        return max(0.0, self._next_allowed_operation_at - time.monotonic())
 
     async def _async_connect(self) -> FreshIntelliVent:
         """Connect to the BLE device."""

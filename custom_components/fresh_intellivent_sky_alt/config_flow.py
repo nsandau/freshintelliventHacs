@@ -1,4 +1,5 @@
 """Config flow for Fresh Intellivent Sky integration."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -21,16 +22,24 @@ from pyfreshintellivent.helpers import validated_authentication_code
 from voluptuous.validators import All, Range
 
 from .const import (
+    AUTH_CODE_EMPTY,
+    AUTH_CODE_ONLY_ZERO,
+    AUTH_FETCH,
+    AUTH_MANUAL,
     CONF_AUTH_KEY,
+    CONF_DEVICE_INFO_FETCH_EVERY,
+    CONF_ERROR_COOLDOWN_SECONDS,
+    CONF_MODE_FETCH_EVERY,
     CONF_SCAN_INTERVAL,
+    CONF_WRITE_DEBOUNCE_MS,
+    DEFAULT_DEVICE_INFO_FETCH_EVERY,
+    DEFAULT_ERROR_COOLDOWN_SECONDS,
+    DEFAULT_MODE_FETCH_EVERY,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_WRITE_DEBOUNCE_MS,
     DOMAIN,
     NAME,
-    AUTH_MANUAL,
-    AUTH_FETCH,
     NO_AUTH,
-    AUTH_CODE_ONLY_ZERO,
-    AUTH_CODE_EMPTY,
     TIMEOUT,
 )
 
@@ -305,6 +314,34 @@ class FreshIntelliventSkyOptionsFlowHandler(OptionsFlow):  # type: ignore[misc]
                     DEFAULT_SCAN_INTERVAL,
                 ),
             ): All(int, Range(min=5)),
+            vol.Optional(
+                CONF_MODE_FETCH_EVERY,
+                default=self._config_entry.options.get(
+                    CONF_MODE_FETCH_EVERY,
+                    DEFAULT_MODE_FETCH_EVERY,
+                ),
+            ): All(int, Range(min=1)),
+            vol.Optional(
+                CONF_DEVICE_INFO_FETCH_EVERY,
+                default=self._config_entry.options.get(
+                    CONF_DEVICE_INFO_FETCH_EVERY,
+                    DEFAULT_DEVICE_INFO_FETCH_EVERY,
+                ),
+            ): All(int, Range(min=1)),
+            vol.Optional(
+                CONF_WRITE_DEBOUNCE_MS,
+                default=self._config_entry.options.get(
+                    CONF_WRITE_DEBOUNCE_MS,
+                    DEFAULT_WRITE_DEBOUNCE_MS,
+                ),
+            ): All(int, Range(min=0)),
+            vol.Optional(
+                CONF_ERROR_COOLDOWN_SECONDS,
+                default=self._config_entry.options.get(
+                    CONF_ERROR_COOLDOWN_SECONDS,
+                    DEFAULT_ERROR_COOLDOWN_SECONDS,
+                ),
+            ): All(int, Range(min=0)),
         }
 
         return cast(
