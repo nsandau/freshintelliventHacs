@@ -1,4 +1,5 @@
 """Support for switches."""
+
 from __future__ import annotations
 
 import logging
@@ -28,9 +29,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up sensors dynamically through discovery."""
-    coordinator: FreshIntelliventCoordinator = hass.data[DOMAIN][
-        config_entry.entry_id
-    ]
+    coordinator: FreshIntelliventCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
     async_add_entities(
         [

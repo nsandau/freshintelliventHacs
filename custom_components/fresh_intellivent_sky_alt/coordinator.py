@@ -227,7 +227,20 @@ class FreshIntelliventCoordinator(DataUpdateCoordinator[FreshIntelliVent]):
             return client
 
         try:
-            return await self._run_session_operation("poll", _fetch_data)
+            client = await self._run_session_operation("poll", _fetch_data)
+
+            if self.data is not None:
+                if not fetch_modes and self.data.modes:
+                    client.modes = copy.deepcopy(self.data.modes)
+
+                if not fetch_device_info:
+                    client.name = self.data.name
+                    client.manufacturer = self.data.manufacturer
+                    client.fw_version = self.data.fw_version
+                    client.hw_version = self.data.hw_version
+                    client.sw_version = self.data.sw_version
+
+            return client
         except Exception as err:  # pylint: disable=broad-except
             raise UpdateFailed(f"Unable to fetch data: {err}") from err
 
